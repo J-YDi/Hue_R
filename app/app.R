@@ -16,6 +16,9 @@ pal_meta  <- pal$meta
 pal_cols  <- pal$cols
 cvd_check <- pal$cvd_check  # smallest ΔE2000, normal vision / worst colour blindness
 N_MAX     <- pal$n_max
+PKGS      <- sort(unique(pal_meta$package))
+PKGS      <- PKGS[order(tolower(PKGS))]
+DEFAULT_PKGS <- c("ggplot2", "grDevices", "RColorBrewer", "viridis", "wesanderson")
 
 ROWS_PER_BLOCK   <- 50   # colours tab: rows per column block (as in the PDF)
 BLOCKS_PER_PAGE  <- 5    # palettes tab: column blocks per page (as in the PDF)
@@ -221,6 +224,10 @@ css <- "
 .cvd-grid div { font-size:10px; text-align:center; }
 .cvd-grid .sw { height:26px; border:1px solid #999; border-radius:3px; }
 .verdict { font-weight:bold; font-size:13px; margin:6px 0 2px; }
+.pkg-box { max-height:220px; overflow-y:auto; border:1px solid #dee2e6; border-radius:4px;
+           padding:4px 8px; margin-bottom:12px; font-size:13px; }
+.pkg-box .form-group { margin-bottom:0; }
+.pkg-box .checkbox { margin:0; }
 .pager { display:flex; align-items:center; gap:8px; margin-bottom:8px; flex-wrap:wrap; }
 .bslib-sidebar-layout > .sidebar { font-size:14px; }
 "
@@ -278,11 +285,12 @@ ui <- page_sidebar(
       checkboxGroupInput("pal_type", tags$b("Type"), inline = TRUE,
                          choices = c("continuous", "discrete", "dynamic"),
                          selected = c("continuous", "discrete", "dynamic")),
-      selectizeInput("pal_pkg", tags$b("Packages"), multiple = TRUE,
-                     choices = sort(unique(pal_meta$package)),
-                     selected = c("ggplot2", "grDevices", "RColorBrewer", "viridis", "wesanderson"),
-                     options = list(plugins = list("remove_button"),
-                                    placeholder = "All packages")),
+      div(style = "display:flex; align-items:center; justify-content:space-between; margin-bottom:4px;",
+          tags$b("Packages"),
+          actionButton("toggle_all_pkg", "Select all / none", class = "btn-sm btn-outline-primary",
+                       style = "font-size: 11px; padding: 4px 8px;")),
+      div(class = "pkg-box",
+          checkboxGroupInput("pal_pkg", NULL, choices = PKGS, selected = DEFAULT_PKGS)),
       sliderInput("cvd_min", tags$b("Colour-blind friendly: minimum ΔE"),
                   min = 0, max = 20, value = 0, step = 1),
       p(class = "text-muted small", style = "margin-top:-8px",
@@ -290,7 +298,7 @@ ui <- page_sidebar(
         "with deuteranopia, protanopia and tritanopia. 0 = no filter, 8 = distinct."),
       p(class = "text-muted small",
         "Discrete palettes have a fixed number of colours: when you ask for more, ",
-        "all their colours are shown. Empty package filter = all packages.")
+        "all their colours are shown.")
     ),
 
     hr(),
@@ -400,7 +408,7 @@ server <- function(input, output, session) {
 
   pal_filtered <- reactive({
     m <- pal_meta[pal_meta$type %in% input$pal_type, ]
-    if (length(input$pal_pkg)) m <- m[m$package %in% input$pal_pkg, ]
+    m <- m[m$package %in% input$pal_pkg, ]
     if (isTRUE(input$cvd_min > 0)) {
       n <- max(2L, n_val())
       d <- vapply(m$id, function(id) cvd_check[[id]]["cvd", n], 0)
@@ -461,6 +469,12 @@ server <- function(input, output, session) {
       div(class = "sheet-wrap", blocks))
   })
 
+  # select all packages, or none if they are all selected
+  observeEvent(input$toggle_all_pkg, {
+    sel <- if (length(input$pal_pkg) == length(PKGS)) character(0) else PKGS
+    updateCheckboxGroupInput(session, "pal_pkg", selected = sel)
+  })
+
   # selecting a palette: show it, make it visible in the sheet and highlight it
   focus <- reactiveVal(NULL)
 
@@ -474,8 +488,8 @@ server <- function(input, output, session) {
     m <- pal_meta[pal_meta$id == input$pal_search, ]
     if (!(m$type %in% input$pal_type))
       updateCheckboxGroupInput(session, "pal_type", selected = c(input$pal_type, m$type))
-    if (length(input$pal_pkg) && !(m$package %in% input$pal_pkg))
-      updateSelectizeInput(session, "pal_pkg", selected = c(input$pal_pkg, m$package))
+    if (!(m$package %in% input$pal_pkg))
+      updateCheckboxGroupInput(session, "pal_pkg", selected = c(input$pal_pkg, m$package))
     focus(m$id)
   })
 
