@@ -8,6 +8,7 @@
 
 library(paletteer)
 library(wesanderson)
+source(file.path("app", "cvd.R"))  # simulate_cvd(), min_de()
 
 out_dir <- file.path("app", "data")
 dir.create(out_dir, showWarnings = FALSE, recursive = TRUE)
@@ -86,10 +87,31 @@ gg_color_hue <- function(n) {
 add_pal("ggplot2::default", "ggplot2", "default", "gg_color_hue", "continuous",
         "qualitative", N_MAX, lapply(seq_len(N_MAX), function(n) hex7(gg_color_hue(n))))
 
+# ---- 3. Colour-blind check ----------------------------------------------------
+# For each palette and each n: smallest difference (CIEDE2000) between two of its
+# colours, with normal vision and in the worst of deuteranopia, protanopia and
+# tritanopia. Used by the "colour-blind friendly" filter of the app.
+pal_n_cols <- function(id, type, values, n) {
+  if (type == "discrete") utils::head(values, n) else values[[min(n, length(values))]]
+}
+cvd_check <- lapply(names(cols), function(id) {
+  m <- meta[[which(vapply(meta, function(x) x$id, "") == id)]]
+  res <- matrix(NA_real_, 2, N_MAX, dimnames = list(c("normal", "cvd"), NULL))
+  for (n in 2:N_MAX) {
+    v <- pal_n_cols(id, m$type, cols[[id]], n)
+    if (length(unique(v)) < 2) next
+    res["normal", n] <- min_de(v)
+    res["cvd", n] <- min(vapply(c("deuteranopia", "protanopia", "tritanopia"),
+                                function(t) min_de(simulate_cvd(v, t)), 0))
+  }
+  round(res, 1)
+})
+names(cvd_check) <- names(cols)
+
 meta <- do.call(rbind, meta)
 meta <- meta[order(tolower(meta$package), tolower(meta$palette)), ]
 rownames(meta) <- NULL
-saveRDS(list(meta = meta, cols = cols, n_max = N_MAX),
+saveRDS(list(meta = meta, cols = cols, n_max = N_MAX, cvd_check = cvd_check),
         file.path(out_dir, "palettes.rds"), compress = "gzip")
 
 message(nrow(colors_df), " colours, ", nrow(meta), " palettes")

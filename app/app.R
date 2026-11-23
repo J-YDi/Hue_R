@@ -7,12 +7,14 @@
 
 library(shiny)
 library(bslib)
+source("cvd.R")  # colour vision deficiency simulation + CIEDE2000
 
 # ---- Data (pre-computed by data-raw/build_data.R) ----------------------------
 colors_df <- readRDS("data/colors.rds")
 pal       <- readRDS("data/palettes.rds")
 pal_meta  <- pal$meta
 pal_cols  <- pal$cols
+cvd_check <- pal$cvd_check  # smallest ΔE2000, normal vision / worst colour blindness
 N_MAX     <- pal$n_max
 
 ROWS_PER_BLOCK   <- 50   # colours tab: rows per column block (as in the PDF)
@@ -83,11 +85,11 @@ copy_btn <- function(text, label = "Copy") {
 }
 
 # one row of a sheet (name, R, G, B, HEX), coloured by its own HEX
-sheet_row <- function(name, hex, cls, attr) {
+sheet_row <- function(name, hex, cls, attr, show = hex) {
   rgbv <- grDevices::col2rgb(hex)
   tags$tr(
     class = cls, `data-key` = attr,
-    style = sprintf("background:%s;color:%s", hex, text_col(hex)),
+    style = sprintf("background:%s;color:%s", show, text_col(show)),
     tags$td(class = "nm", name), tags$td(class = "num", rgbv[1]),
     tags$td(class = "num", rgbv[2]), tags$td(class = "num", rgbv[3]),
     tags$td(class = "hx", hex)
@@ -99,6 +101,25 @@ sheet_block <- function(rows, first_col) {
     tags$thead(tags$tr(tags$th(class = "nm", first_col), tags$th("R"),
                        tags$th("G"), tags$th("B"), tags$th("HEX"))),
     tags$tbody(rows))
+}
+
+# ---- Colour vision helpers ---------------------------------------------------
+# simulated colours of the whole colour sheet, for each type of vision
+colour_sim <- lapply(CVD_TYPES, function(t) simulate_cvd(colors_df$HEX, t))
+names(colour_sim) <- CVD_TYPES
+
+de_badge <- function(d) {
+  if (is.na(d)) return(span(class = "badge text-bg-secondary", "–"))
+  cls <- if (d >= 8) "text-bg-success" else if (d >= 5) "text-bg-warning" else "text-bg-danger"
+  span(class = paste("badge", cls), title = "Smallest ΔE2000 between two colours",
+       sprintf("ΔE %.1f", d))
+}
+
+cvd_banner <- function(type) {
+  if (type == "normal") return(NULL)
+  div(class = "alert alert-info py-1 px-2 mb-2 small",
+      tags$b("Simulated view: ", names(CVD_TYPES)[CVD_TYPES == type], ". "),
+      "Backgrounds show how the colours are seen; the codes are those of the real colours.")
 }
 
 # ---- Colours sheet: built once (static) --------------------------------------
@@ -136,6 +157,12 @@ $(document).on('click', 'tr.prow', function() {
 });
 $(document).on('click', '.near-item', function() {
   Shiny.setInputValue('colour_click', $(this).attr('data-key'), {priority: 'event'});
+});
+// recolour the colour sheet with simulated colours (same order as the rows)
+Shiny.addCustomMessageHandler('recolour', function(m) {
+  $('tr.crow').each(function(i) {
+    this.style.background = m.bg[i]; this.style.color = m.fg[i];
+  });
 });
 // highlight rows of a colour / palette and scroll to the first one
 Shiny.addCustomMessageHandler('highlight', function(m) {
@@ -186,6 +213,14 @@ css <- "
 .pal-table td.sw { width:26px; }
 .rcode { font-size:12px; white-space:pre-wrap; word-break:break-all; background:#f6f6f6;
          padding:6px; border-radius:4px; }
+.cvd-row { display:flex; align-items:center; gap:6px; font-size:12px; margin:2px 0; }
+.cvd-row .lab { width:92px; flex:none; }
+.cvd-row .mini { flex:1; display:flex; height:16px; border:1px solid #999; border-radius:3px; overflow:hidden; }
+.cvd-row .mini div { flex:1; }
+.cvd-grid { display:grid; grid-template-columns:repeat(4, 1fr); gap:4px; margin-top:8px; }
+.cvd-grid div { font-size:10px; text-align:center; }
+.cvd-grid .sw { height:26px; border:1px solid #999; border-radius:3px; }
+.verdict { font-weight:bold; font-size:13px; margin:6px 0 2px; }
 .pager { display:flex; align-items:center; gap:8px; margin-bottom:8px; flex-wrap:wrap; }
 .bslib-sidebar-layout > .sidebar { font-size:14px; }
 "
@@ -203,6 +238,10 @@ ui <- page_sidebar(
 
   sidebar = sidebar(
     width = 320,
+
+    # ---------------- Colour vision (both tabs) ----------------
+    selectInput("cvd", tags$b("Simulate colour vision"), choices = CVD_TYPES),
+    hr(),
 
     # ---------------- Colors controls ----------------
     conditionalPanel(
@@ -244,6 +283,11 @@ ui <- page_sidebar(
                      selected = c("ggplot2", "grDevices", "RColorBrewer", "viridis", "wesanderson"),
                      options = list(plugins = list("remove_button"),
                                     placeholder = "All packages")),
+      sliderInput("cvd_min", tags$b("Colour-blind friendly: minimum ΔE"),
+                  min = 0, max = 20, value = 0, step = 1),
+      p(class = "text-muted small", style = "margin-top:-8px",
+        "Keeps palettes whose colours stay distinct (smallest ΔE2000 between two colours) ",
+        "with deuteranopia, protanopia and tritanopia. 0 = no filter, 8 = distinct."),
       p(class = "text-muted small",
         "Discrete palettes have a fixed number of colours: when you ask for more, ",
         "all their colours are shown. Empty package filter = all packages.")
@@ -267,10 +311,12 @@ ui <- page_sidebar(
     full_screen = TRUE,
     nav_panel(
       "Colors",
+      uiOutput("cvd_banner_c"),
       div(class = "colours", colour_sheet)
     ),
     nav_panel(
       "Palettes",
+      uiOutput("cvd_banner_p"),
       div(class = "pager",
           actionButton("prev_page", "◀", class = "btn-sm btn-outline-primary"),
           uiOutput("page_label", inline = TRUE),
@@ -282,6 +328,14 @@ ui <- page_sidebar(
 
 # ---- Server ------------------------------------------------------------------
 server <- function(input, output, session) {
+
+  # =============== Colour vision ===============
+  output$cvd_banner_c <- renderUI(cvd_banner(input$cvd))
+  output$cvd_banner_p <- renderUI(cvd_banner(input$cvd))
+  observeEvent(input$cvd, {
+    bg <- colour_sim[[input$cvd]]
+    session$sendCustomMessage("recolour", list(bg = bg, fg = text_col(bg)))
+  }, ignoreInit = TRUE)
 
   # =============== Colours ===============
   observeEvent(input$colour_click, {
@@ -298,15 +352,21 @@ server <- function(input, output, session) {
     r <- colors_df[colors_df$name == input$colour_search, ]
     req(nrow(r) == 1)
     rgb_txt <- sprintf("%d, %d, %d", r$R, r$G, r$B)
+    show <- simulate_cvd(r$HEX, input$cvd)
     tagList(
       div(class = "big-swatch",
-          style = sprintf("background:%s;color:%s", r$HEX, text_col(r$HEX)), r$name),
+          style = sprintf("background:%s;color:%s", show, text_col(show)), r$name),
       tags$table(class = "codes",
         tags$tr(tags$td("RGB"), tags$td(code(rgb_txt)), tags$td(copy_btn(rgb_txt))),
         tags$tr(tags$td("HEX"), tags$td(code(r$HEX)), tags$td(copy_btn(r$HEX))),
         tags$tr(tags$td("R"), tags$td(code(sprintf('"%s"', r$name))),
                 tags$td(copy_btn(sprintf('"%s"', r$name))))
-      )
+      ),
+      div(class = "small mt-2", tags$b("Seen with:")),
+      div(class = "cvd-grid", lapply(CVD_TYPES, function(t) {
+        div(div(class = "sw", style = sprintf("background:%s", simulate_cvd(r$HEX, t))),
+            CVD_SHORT[[t]])
+      }))
     )
   })
 
@@ -341,6 +401,11 @@ server <- function(input, output, session) {
   pal_filtered <- reactive({
     m <- pal_meta[pal_meta$type %in% input$pal_type, ]
     if (length(input$pal_pkg)) m <- m[m$package %in% input$pal_pkg, ]
+    if (isTRUE(input$cvd_min > 0)) {
+      n <- max(2L, n_val())
+      d <- vapply(m$id, function(id) cvd_check[[id]]["cvd", n], 0)
+      m <- m[!is.na(d) & d >= input$cvd_min, ]
+    }
     m
   })
 
@@ -373,6 +438,7 @@ server <- function(input, output, session) {
   output$pal_sheet <- renderUI({
     L <- pal_layout(); n <- n_val()
     sel_id <- input$pal_search
+    cvd <- input$cvd
     if (!length(L$ids)) return(p("No palette matches these filters."))
     sel <- L$page == page()
     ids <- L$ids[sel]; blk <- L$block[sel]
@@ -383,7 +449,8 @@ server <- function(input, output, session) {
                                             tags$td(class = "nm", id),
                                             tags$td(colspan = 4, "not available for this n"))))
         cls <- if (identical(id, sel_id)) "prow hl" else "prow"
-        lapply(v, function(hx) sheet_row(id, hx, cls, id))
+        show <- simulate_cvd(v, cvd)
+        Map(function(hx, sh) sheet_row(id, hx, cls, id, show = sh), v, show)
       }), recursive = FALSE)
       sheet_block(rows, "package::palette")
     })
@@ -436,8 +503,34 @@ server <- function(input, output, session) {
     note <- if (length(v) < n)
       div(class = "alert alert-warning py-1 px-2 small mt-2 mb-0",
           sprintf("This %s palette has only %d colours: all of them are shown.", m$type, length(v)))
+    # colour vision check: smallest ΔE2000 between two colours for each vision
+    de <- vapply(CVD_TYPES, function(t) min_de(simulate_cvd(v, t)), 0)
+    names(de) <- CVD_TYPES
+    worst <- min(de[c("deuteranopia", "protanopia", "tritanopia")])
+    verdict <- if (is.na(worst)) NULL else if (worst >= 8)
+      div(class = "verdict text-success", "✔ Colour-blind friendly") else if (worst >= 5)
+      div(class = "verdict text-warning", "⚠ Use with care for colour-blind readers") else
+      div(class = "verdict text-danger", "✖ Not colour-blind friendly")
+    vision_check <- tagList(
+      div(class = "mt-3 small", tags$b("Colour vision check")),
+      verdict,
+      lapply(seq_along(CVD_TYPES), function(i) {
+        t <- CVD_TYPES[[i]]
+        div(class = "cvd-row",
+            span(class = "lab", CVD_SHORT[[t]]),
+            div(class = "mini", lapply(simulate_cvd(v, t), function(h) div(style = sprintf("background:%s", h)))),
+            de_badge(de[[t]]))
+      }),
+      p(class = "text-muted small mt-1",
+        "ΔE = smallest difference (CIEDE2000) between two colours of the palette: ",
+        "≥ 8 distinct, 5–8 close, < 5 hard to tell apart. ",
+        if (!is.na(de[["normal"]]) && de[["normal"]] < 8)
+          "Sequential palettes with many colours have close neighbours even for normal vision: try a smaller n. ",
+        "Simulation: Machado et al. (2009).")
+    )
+    show <- simulate_cvd(v, input$cvd)
     tagList(
-      div(class = "strip", lapply(v, function(h) div(style = sprintf("background:%s", h), title = h))),
+      div(class = "strip", lapply(show, function(h) div(style = sprintf("background:%s", h), title = h))),
       div(class = "small text-muted mt-1",
           sprintf("%s palette – %s – %d colour%s", m$type, m$kind,
                   length(v), if (length(v) > 1) "s" else "")),
@@ -451,7 +544,8 @@ server <- function(input, output, session) {
           copy_btn(vec_txt, "Copy HEX vector"),
           copy_btn(paste(sprintf("%d, %d, %d", d$R, d$G, d$B), collapse = "\n"), "Copy RGB")),
       div(class = "mt-2 small", tags$b("Same colours in R:")),
-      div(class = "rcode", pal_code(id, n), copy_btn(pal_code(id, n)))
+      div(class = "rcode", pal_code(id, n), copy_btn(pal_code(id, n))),
+      vision_check
     )
   })
 }

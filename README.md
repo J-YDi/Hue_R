@@ -8,11 +8,14 @@
 - **Colors**: the sheet of the 657 named colours of R and ggplot2 (`colors()`), each row coloured by its own colour. Search a colour by name to get its RGB and HEX codes, or use the reverse search: type a HEX or `R, G, B` value to get the closest named colours.
 - **Palettes**: choose the number of colours (1 to 30), then browse the sheet of 2,918 palettes (base R, ggplot2 default, paletteer, RColorBrewer, wesanderson…), filtered by package and type. Search a palette by name to get its RGB and HEX codes, copy them as an R vector `c("#…", …)` and get the R code that reproduces them. Discrete palettes have a fixed size: when more colours are requested, all of their colours are shown.
 
+- **Colour vision**: simulate how the colours and palettes are seen with deuteranopia, protanopia, tritanopia, their partial forms (deuteranomaly, protanomaly, tritanomaly) and achromatopsia. Each palette gets a colour vision check (smallest CIEDE2000 difference between two of its colours for each type of vision) and the sheet can be filtered to keep only colour-blind friendly palettes. Simulation: Machado, Oliveira & Fernandes (2009), identical to `colorspace::deutan()`, `protan()` and `tritan()`.
+
 Click any row of a sheet to get its codes.
 
 ## Structure
 - `app/app.R`: the Shiny app (only needs `shiny` and `bslib`)
-- `app/data/`: pre-computed colours and palettes
+- `app/cvd.R`: colour vision simulation and colour differences (CIEDE2000)
+- `app/data/`: pre-computed colours, palettes and colour vision checks
 - `data-raw/build_data.R`: rebuilds `app/data/` (needs `paletteer`, `wesanderson` and the palette packages used by `paletteer`). Run it from the repository root, e.g. after updating `paletteer`.
 - `.github/workflows/deploy-shinylive.yml`: exports the app with Shinylive and publishes it on GitHub Pages at each push on `main`.
 
