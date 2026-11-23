@@ -275,6 +275,8 @@ ui <- page_sidebar(
       "input.main_tabs == 'Palettes'",
       numericInput("n", tags$b(sprintf("Number of colours (1 to %d)", N_MAX)),
                    value = 15, min = 1, max = N_MAX, step = 1),
+      checkboxInput("strict", "Strict: only palettes with at least this number of colours",
+                    value = FALSE),
       hr(),
       h6("Search", style = "font-weight: bold; margin-bottom: 10px; color: #333;"),
       selectizeInput("pal_search", tags$b("Palette"), choices = NULL,
@@ -409,6 +411,7 @@ server <- function(input, output, session) {
   pal_filtered <- reactive({
     m <- pal_meta[pal_meta$type %in% input$pal_type, ]
     m <- m[m$package %in% input$pal_pkg, ]
+    if (isTRUE(input$strict)) m <- m[m$max_n >= n_val(), ]
     if (isTRUE(input$cvd_min > 0)) {
       n <- max(2L, n_val())
       d <- vapply(m$id, function(id) cvd_check[[id]]["cvd", n], 0)
@@ -433,7 +436,7 @@ server <- function(input, output, session) {
   n_pages <- reactive(max(1L, pal_layout()$page))
   page <- reactiveVal(1L)
   # priority > 0: runs before the "focus" observer when both are triggered together
-  observeEvent(list(input$pal_type, input$pal_pkg), page(1L), ignoreInit = TRUE,
+  observeEvent(list(input$pal_type, input$pal_pkg, input$strict), page(1L), ignoreInit = TRUE,
                ignoreNULL = FALSE, priority = 10)
   observeEvent(n_pages(), if (page() > n_pages()) page(n_pages()))
   observeEvent(input$prev_page, page(max(1L, page() - 1L)))
@@ -488,6 +491,11 @@ server <- function(input, output, session) {
     m <- pal_meta[pal_meta$id == input$pal_search, ]
     if (!(m$type %in% input$pal_type))
       updateCheckboxGroupInput(session, "pal_type", selected = c(input$pal_type, m$type))
+    if (isTRUE(input$strict) && m$max_n < n_val()) {
+      updateCheckboxInput(session, "strict", value = FALSE)
+      showNotification(sprintf("Strict mode turned off: %s has only %d colours.", m$id, m$max_n),
+                       type = "warning", duration = 6)
+    }
     if (!(m$package %in% input$pal_pkg))
       updateCheckboxGroupInput(session, "pal_pkg", selected = c(input$pal_pkg, m$package))
     focus(m$id)
