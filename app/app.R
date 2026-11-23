@@ -190,72 +190,94 @@ css <- "
 .bslib-sidebar-layout > .sidebar { font-size:14px; }
 "
 
-ui <- page_navbar(
-  title = "Hue R",
+ui <- page_sidebar(
+  title = tags$div(
+    tags$img(src = "logo.png", height = "40px", style = "vertical-align: middle; margin-right: 10px;"),
+    "Hue R - Colors & palettes codes in R",
+    style = "display: flex; align-items: center;"
+  ),
+  # Bootstrap 5 theme without Google font: bootswatch presets download a font
+  # at start-up, which fails under webR/Shinylive.
   theme = bs_theme(version = 5),
-  header = tags$head(tags$style(HTML(css)), tags$script(HTML(js))),
-  fillable = TRUE,
+  tags$head(tags$style(HTML(css)), tags$script(HTML(js))),
 
-  # ---------------- Tab 1: named colours ----------------
-  nav_panel(
-    "Colors",
-    layout_sidebar(
-      sidebar = sidebar(
-        width = 320, open = "always",
-        selectizeInput("colour_search", "Search a colour name",
-                       choices = c("", colors_df$name), selected = "",
-                       options = list(placeholder = "e.g. steelblue", maxOptions = 1000)),
-        uiOutput("colour_result"),
-        hr(),
-        textInput("hex_search", "Reverse search: closest named colours",
-                  placeholder = "#4682B4  or  70, 130, 180"),
-        uiOutput("near_result"),
-        hr(),
-        p(class = "text-muted small",
-          "Click any row of the sheet to get its codes. ",
-          length(colors_df$name), " named colours from ", code("colors()"),
-          ", usable in base R and ggplot2.")
+  sidebar = sidebar(
+    width = 320,
+
+    # ---------------- Colors controls ----------------
+    conditionalPanel(
+      "input.main_tabs == 'Colors'",
+      h6("Search", style = "font-weight: bold; margin-bottom: 10px; color: #333;"),
+      selectizeInput("colour_search", tags$b("Colour name"),
+                     choices = c("", colors_df$name), selected = "",
+                     options = list(placeholder = "e.g. steelblue", maxOptions = 1000)),
+      uiOutput("colour_result"),
+      hr(),
+      h6("Reverse search", style = "font-weight: bold; margin-bottom: 10px; color: #333;"),
+      textInput("hex_search", tags$b("Closest named colours"),
+                placeholder = "#4682B4  or  70, 130, 180"),
+      uiOutput("near_result"),
+      hr(),
+      p(class = "text-muted small",
+        "Click any row of the sheet to get its codes. ",
+        length(colors_df$name), " named colours from ", code("colors()"),
+        ", usable in base R and ggplot2.")
+    ),
+
+    # ---------------- Palettes controls ----------------
+    conditionalPanel(
+      "input.main_tabs == 'Palettes'",
+      numericInput("n", tags$b(sprintf("Number of colours (1 to %d)", N_MAX)),
+                   value = 15, min = 1, max = N_MAX, step = 1),
+      hr(),
+      h6("Search", style = "font-weight: bold; margin-bottom: 10px; color: #333;"),
+      selectizeInput("pal_search", tags$b("Palette"), choices = NULL,
+                     options = list(placeholder = "e.g. RColorBrewer::Set1")),
+      uiOutput("pal_result"),
+      hr(),
+      h6("Filters", style = "font-weight: bold; margin-bottom: 10px; color: #333;"),
+      checkboxGroupInput("pal_type", tags$b("Type"), inline = TRUE,
+                         choices = c("continuous", "discrete", "dynamic"),
+                         selected = c("continuous", "discrete", "dynamic")),
+      selectizeInput("pal_pkg", tags$b("Packages"), multiple = TRUE,
+                     choices = sort(unique(pal_meta$package)),
+                     selected = c("ggplot2", "grDevices", "RColorBrewer", "viridis", "wesanderson"),
+                     options = list(plugins = list("remove_button"),
+                                    placeholder = "All packages")),
+      p(class = "text-muted small",
+        "Discrete palettes have a fixed number of colours: when you ask for more, ",
+        "all their colours are shown. Empty package filter = all packages.")
+    ),
+
+    hr(),
+
+    tags$footer(
+      tags$small(
+        "© 2026 - Jean-Yves Dias",
+        tags$br(),
+        tags$a("Hue R on GitHub", href = "https://github.com/J-YDi/Hue_R",
+               target = "_blank", style = "color: #666;")
       ),
-      div(class = "colours", colour_sheet)
+      style = "text-align: center; color: #666; font-size: 10px; margin-top: 20px; padding-top: 10px;"
     )
   ),
 
-  # ---------------- Tab 2: palettes ----------------
-  nav_panel(
-    "Palettes",
-    layout_sidebar(
-      sidebar = sidebar(
-        width = 340, open = "always",
-        numericInput("n", sprintf("Number of colours (1 to %d)", N_MAX),
-                     value = 15, min = 1, max = N_MAX, step = 1),
-        selectizeInput("pal_search", "Search a palette", choices = NULL,
-                       options = list(placeholder = "e.g. RColorBrewer::Set1")),
-        uiOutput("pal_result"),
-        hr(),
-        tags$b("Sheet filters"),
-        checkboxGroupInput("pal_type", NULL, inline = TRUE,
-                           choices = c("continuous", "discrete", "dynamic"),
-                           selected = c("continuous", "discrete", "dynamic")),
-        selectizeInput("pal_pkg", "Packages", multiple = TRUE,
-                       choices = sort(unique(pal_meta$package)),
-                       selected = c("ggplot2", "grDevices", "RColorBrewer", "viridis", "wesanderson"),
-                       options = list(plugins = list("remove_button"),
-                                      placeholder = "All packages")),
-        p(class = "text-muted small",
-          "Discrete palettes have a fixed number of colours: when you ask for more, ",
-          "all their colours are shown. Empty package filter = all packages.")
-      ),
+  navset_card_tab(
+    id = "main_tabs",
+    full_screen = TRUE,
+    nav_panel(
+      "Colors",
+      div(class = "colours", colour_sheet)
+    ),
+    nav_panel(
+      "Palettes",
       div(class = "pager",
-          actionButton("prev_page", "◀", class = "btn-sm"),
+          actionButton("prev_page", "◀", class = "btn-sm btn-outline-primary"),
           uiOutput("page_label", inline = TRUE),
-          actionButton("next_page", "▶", class = "btn-sm")),
+          actionButton("next_page", "▶", class = "btn-sm btn-outline-primary")),
       div(class = "palettes", uiOutput("pal_sheet"))
     )
-  ),
-
-  nav_spacer(),
-  nav_item(tags$a("Source on GitHub", href = "https://github.com/J-YDi/Hue_R",
-                  target = "_blank"))
+  )
 )
 
 # ---- Server ------------------------------------------------------------------
