@@ -1,0 +1,437 @@
+################################################################################
+#                         Colors & palettes codes in R                         #
+#      Shiny app (Shinylive-ready): named colours and palettes of R with       #
+#                         their RGB and HEX codes                              #
+################################################################################
+###############                  DIAS Jean-Yves                  ###############
+
+library(shiny)
+library(bslib)
+
+# ---- Data (pre-computed by data-raw/build_data.R) ----------------------------
+colors_df <- readRDS("data/colors.rds")
+pal       <- readRDS("data/palettes.rds")
+pal_meta  <- pal$meta
+pal_cols  <- pal$cols
+N_MAX     <- pal$n_max
+
+ROWS_PER_BLOCK   <- 50   # colours tab: rows per column block (as in the PDF)
+BLOCKS_PER_PAGE  <- 5    # palettes tab: column blocks per page (as in the PDF)
+PAL_ROWS_BLOCK   <- 60   # palettes tab: max rows in one block (4 palettes of 15)
+
+# ---- Helpers -----------------------------------------------------------------
+# black or white text depending on the background luminance
+text_col <- function(hex) {
+  m <- grDevices::col2rgb(hex) / 255
+  lum <- 0.299 * m[1, ] + 0.587 * m[2, ] + 0.114 * m[3, ]
+  ifelse(lum > 0.5, "#000000", "#FFFFFF")
+}
+
+hex_to_rgb <- function(hex) {
+  m <- grDevices::col2rgb(hex)
+  data.frame(R = m[1, ], G = m[2, ], B = m[3, ])
+}
+
+# colours of palette `id` for `n` colours (discrete palettes: at most their size)
+get_pal <- function(id, n) {
+  m <- pal_meta[pal_meta$id == id, ]
+  v <- pal_cols[[id]]
+  if (m$type == "discrete") return(utils::head(v, n))
+  v[[min(n, m$max_n)]]
+}
+
+# R code that reproduces the palette
+pal_code <- function(id, n) {
+  m <- pal_meta[pal_meta$id == id, ]
+  switch(m$source,
+    paletteer_c       = sprintf('paletteer::paletteer_c("%s", n = %d)', id, n),
+    paletteer_d       = sprintf('paletteer::paletteer_d("%s")', id),
+    paletteer_dynamic = sprintf('paletteer::paletteer_dynamic("%s", n = %d)', id, min(n, m$max_n)),
+    wes_palette       = sprintf('wesanderson::wes_palette("%s", %d, type = "continuous")',
+                                sub(" \\(continuous\\)$", "", m$palette), n),
+    gg_color_hue      = sprintf('hcl(h = seq(15, 375, length = %d + 1), l = 65, c = 100)[1:%d]', n, n)
+  )
+}
+
+# parse "#4682B4", "4682b4", "#48b" or "70, 130, 180" -> "#RRGGBB" (or NULL)
+parse_colour <- function(x) {
+  x <- trimws(x)
+  if (!nzchar(x)) return(NULL)
+  nums <- suppressWarnings(as.numeric(strsplit(x, "[,; ]+")[[1]]))
+  if (length(nums) == 3 && !anyNA(nums) && all(nums >= 0 & nums <= 255))
+    return(grDevices::rgb(nums[1], nums[2], nums[3], maxColorValue = 255))
+  h <- toupper(sub("^#", "", x))
+  if (grepl("^[0-9A-F]{3}$", h)) h <- paste(rep(strsplit(h, "")[[1]], each = 2), collapse = "")
+  if (grepl("^[0-9A-F]{6}$", h)) return(paste0("#", h))
+  if (tolower(x) %in% colors_df$name) return(colors_df$HEX[colors_df$name == tolower(x)])
+  NULL
+}
+
+# nearest named colours (distance in CIE Lab, closer to perceived difference)
+colors_lab <- grDevices::convertColor(as.matrix(colors_df[, c("R", "G", "B")]) / 255,
+                                      from = "sRGB", to = "Lab")
+nearest_colours <- function(hex, k = 5) {
+  lab <- grDevices::convertColor(t(grDevices::col2rgb(hex)) / 255, from = "sRGB", to = "Lab")
+  d <- sqrt(colSums((t(colors_lab) - as.numeric(lab))^2))
+  o <- order(d)[seq_len(k)]
+  data.frame(colors_df[o, ], dE = round(d[o], 1))
+}
+
+copy_btn <- function(text, label = "Copy") {
+  tags$button(class = "btn btn-sm btn-outline-secondary copy-btn",
+              `data-copy` = text, type = "button", label)
+}
+
+# one row of a sheet (name, R, G, B, HEX), coloured by its own HEX
+sheet_row <- function(name, hex, cls, attr) {
+  rgbv <- grDevices::col2rgb(hex)
+  tags$tr(
+    class = cls, `data-key` = attr,
+    style = sprintf("background:%s;color:%s", hex, text_col(hex)),
+    tags$td(class = "nm", name), tags$td(class = "num", rgbv[1]),
+    tags$td(class = "num", rgbv[2]), tags$td(class = "num", rgbv[3]),
+    tags$td(class = "hx", hex)
+  )
+}
+
+sheet_block <- function(rows, first_col) {
+  tags$table(class = "sheet",
+    tags$thead(tags$tr(tags$th(class = "nm", first_col), tags$th("R"),
+                       tags$th("G"), tags$th("B"), tags$th("HEX"))),
+    tags$tbody(rows))
+}
+
+# ---- Colours sheet: built once (static) --------------------------------------
+colour_sheet <- local({
+  rows <- Map(function(nm, hx) sheet_row(nm, hx, "crow", nm),
+              colors_df$name, colors_df$HEX)
+  blocks <- split(rows, ceiling(seq_along(rows) / ROWS_PER_BLOCK))
+  blocks <- lapply(blocks, sheet_block, first_col = "Color name")
+  div(class = "sheet-wrap", blocks)
+})
+
+# ---- UI ----------------------------------------------------------------------
+js <- "
+function copyText(t) {
+  if (navigator.clipboard && window.isSecureContext) {
+    navigator.clipboard.writeText(t).catch(function(){ fallbackCopy(t); });
+  } else { fallbackCopy(t); }
+}
+function fallbackCopy(t) {
+  var ta = document.createElement('textarea'); ta.value = t;
+  document.body.appendChild(ta); ta.select();
+  try { document.execCommand('copy'); } catch(e) {}
+  document.body.removeChild(ta);
+}
+$(document).on('click', '.copy-btn', function() {
+  var b = $(this), old = b.text();
+  copyText(b.attr('data-copy'));
+  b.text('Copied!'); setTimeout(function(){ b.text(old); }, 1200);
+});
+$(document).on('click', 'tr.crow', function() {
+  Shiny.setInputValue('colour_click', $(this).attr('data-key'), {priority: 'event'});
+});
+$(document).on('click', 'tr.prow', function() {
+  Shiny.setInputValue('pal_click', $(this).attr('data-key'), {priority: 'event'});
+});
+$(document).on('click', '.near-item', function() {
+  Shiny.setInputValue('colour_click', $(this).attr('data-key'), {priority: 'event'});
+});
+// highlight rows of a colour / palette and scroll to the first one
+Shiny.addCustomMessageHandler('highlight', function(m) {
+  var tries = 0;
+  (function go() {
+    $('tr.' + m.cls).removeClass('hl');
+    var rows = $('tr.' + m.cls).filter(function(){ return $(this).attr('data-key') === m.key; });
+    if (rows.length === 0) { if (tries++ < 20) setTimeout(go, 100); return; }
+    rows.addClass('hl');
+    rows[0].scrollIntoView({behavior: 'smooth', block: 'center', inline: 'center'});
+  })();
+});
+"
+
+css <- "
+.sheet-wrap { display:flex; flex-wrap:wrap; align-items:flex-start; gap:0; }
+.sheet-wrap > .sheet { margin:0 -1px -1px 0; }
+.sheet { border-collapse:collapse; font-family:Calibri, Carlito, 'Segoe UI', Arial, sans-serif;
+         font-size:12px; line-height:1.15; }
+.sheet th, .sheet td { border:1px solid #555; padding:1px 4px; white-space:nowrap; }
+.sheet th { background:#fff; color:#000; font-weight:bold; font-style:italic; text-align:left; }
+.sheet td.num { text-align:right; min-width:24px; }
+.sheet td.nm { min-width:128px; }
+.colours .sheet td.nm { min-width:118px; }
+.palettes .sheet td.nm { min-width:200px; max-width:260px; overflow:hidden; text-overflow:ellipsis; }
+.sheet td.hx { font-family:Calibri, Carlito, Arial, sans-serif; }
+.sheet tbody tr { cursor:pointer; }
+.sheet tbody tr:hover td { outline:1px solid #000; }
+.sheet tr.hl td { outline:3px solid #000 !important; outline-offset:-2px; font-weight:bold;
+                  animation: blink 1s ease-in-out 2; }
+@keyframes blink { 50% { outline-color:#ff00ff; } }
+.sheet-note { font-size:12px; text-align:center; border:1px solid #555; border-bottom:0;
+              padding:2px; font-family:Calibri, Carlito, Arial, sans-serif; }
+.big-swatch { height:90px; border-radius:6px; border:1px solid #888; display:flex;
+              align-items:center; justify-content:center; font-weight:bold; font-size:18px; }
+.codes { width:100%; font-size:14px; margin-top:8px; }
+.codes td { padding:3px 4px; vertical-align:middle; }
+.codes td:first-child { font-weight:bold; width:42px; }
+.codes code { font-size:13px; }
+.near-item { display:flex; align-items:center; gap:8px; cursor:pointer; padding:2px 4px;
+             border-radius:4px; font-size:13px; }
+.near-item:hover { background:#eee; }
+.near-sw { width:28px; height:18px; border:1px solid #888; border-radius:3px; flex:none; }
+.strip { display:flex; height:46px; border:1px solid #888; border-radius:6px; overflow:hidden; }
+.strip div { flex:1; }
+.pal-table { font-size:13px; width:100%; border-collapse:collapse; margin-top:8px; }
+.pal-table td { padding:1px 6px; border:1px solid #ccc; }
+.pal-table td.sw { width:26px; }
+.rcode { font-size:12px; white-space:pre-wrap; word-break:break-all; background:#f6f6f6;
+         padding:6px; border-radius:4px; }
+.pager { display:flex; align-items:center; gap:8px; margin-bottom:8px; flex-wrap:wrap; }
+.bslib-sidebar-layout > .sidebar { font-size:14px; }
+"
+
+ui <- page_navbar(
+  title = "Colors & palettes codes in R",
+  theme = bs_theme(version = 5),
+  header = tags$head(tags$style(HTML(css)), tags$script(HTML(js))),
+  fillable = TRUE,
+
+  # ---------------- Tab 1: named colours ----------------
+  nav_panel(
+    "Colors",
+    layout_sidebar(
+      sidebar = sidebar(
+        width = 320, open = "always",
+        selectizeInput("colour_search", "Search a colour name",
+                       choices = c("", colors_df$name), selected = "",
+                       options = list(placeholder = "e.g. steelblue", maxOptions = 1000)),
+        uiOutput("colour_result"),
+        hr(),
+        textInput("hex_search", "Reverse search: closest named colours",
+                  placeholder = "#4682B4  or  70, 130, 180"),
+        uiOutput("near_result"),
+        hr(),
+        p(class = "text-muted small",
+          "Click any row of the sheet to get its codes. ",
+          length(colors_df$name), " named colours from ", code("colors()"),
+          ", usable in base R and ggplot2.")
+      ),
+      div(class = "colours", colour_sheet)
+    )
+  ),
+
+  # ---------------- Tab 2: palettes ----------------
+  nav_panel(
+    "Palettes",
+    layout_sidebar(
+      sidebar = sidebar(
+        width = 340, open = "always",
+        numericInput("n", sprintf("Number of colours (1 to %d)", N_MAX),
+                     value = 15, min = 1, max = N_MAX, step = 1),
+        selectizeInput("pal_search", "Search a palette", choices = NULL,
+                       options = list(placeholder = "e.g. RColorBrewer::Set1")),
+        uiOutput("pal_result"),
+        hr(),
+        tags$b("Sheet filters"),
+        checkboxGroupInput("pal_type", NULL, inline = TRUE,
+                           choices = c("continuous", "discrete", "dynamic"),
+                           selected = c("continuous", "discrete", "dynamic")),
+        selectizeInput("pal_pkg", "Packages", multiple = TRUE,
+                       choices = sort(unique(pal_meta$package)),
+                       selected = c("ggplot2", "grDevices", "RColorBrewer", "viridis", "wesanderson"),
+                       options = list(plugins = list("remove_button"),
+                                      placeholder = "All packages")),
+        p(class = "text-muted small",
+          "Discrete palettes have a fixed number of colours: when you ask for more, ",
+          "all their colours are shown. Empty package filter = all packages.")
+      ),
+      div(class = "pager",
+          actionButton("prev_page", "◀", class = "btn-sm"),
+          uiOutput("page_label", inline = TRUE),
+          actionButton("next_page", "▶", class = "btn-sm")),
+      div(class = "palettes", uiOutput("pal_sheet"))
+    )
+  ),
+
+  nav_spacer(),
+  nav_item(tags$a("Source on GitHub", href = "https://github.com/J-YDi/colors_codes_in_R",
+                  target = "_blank"))
+)
+
+# ---- Server ------------------------------------------------------------------
+server <- function(input, output, session) {
+
+  # =============== Colours ===============
+  observeEvent(input$colour_click, {
+    updateSelectizeInput(session, "colour_search", selected = input$colour_click)
+  })
+
+  observeEvent(input$colour_search, {
+    req(input$colour_search)
+    session$sendCustomMessage("highlight", list(cls = "crow", key = input$colour_search))
+  })
+
+  output$colour_result <- renderUI({
+    req(input$colour_search)
+    r <- colors_df[colors_df$name == input$colour_search, ]
+    req(nrow(r) == 1)
+    rgb_txt <- sprintf("%d, %d, %d", r$R, r$G, r$B)
+    tagList(
+      div(class = "big-swatch",
+          style = sprintf("background:%s;color:%s", r$HEX, text_col(r$HEX)), r$name),
+      tags$table(class = "codes",
+        tags$tr(tags$td("RGB"), tags$td(code(rgb_txt)), tags$td(copy_btn(rgb_txt))),
+        tags$tr(tags$td("HEX"), tags$td(code(r$HEX)), tags$td(copy_btn(r$HEX))),
+        tags$tr(tags$td("R"), tags$td(code(sprintf('"%s"', r$name))),
+                tags$td(copy_btn(sprintf('"%s"', r$name))))
+      )
+    )
+  })
+
+  output$near_result <- renderUI({
+    req(nzchar(trimws(input$hex_search)))
+    hex <- parse_colour(input$hex_search)
+    if (is.null(hex)) return(p(class = "text-danger small", "Not a valid HEX or R, G, B value."))
+    nn <- nearest_colours(hex)
+    tagList(
+      div(class = "near-item", style = "cursor:default",
+          div(class = "near-sw", style = sprintf("background:%s", hex)),
+          tags$b(hex), span(class = "text-muted", "(your colour)")),
+      lapply(seq_len(nrow(nn)), function(i) {
+        div(class = "near-item", `data-key` = nn$name[i],
+            div(class = "near-sw", style = sprintf("background:%s", nn$HEX[i])),
+            span(nn$name[i]), span(class = "text-muted", nn$HEX[i]),
+            span(class = "text-muted ms-auto", if (nn$dE[i] == 0) "exact" else paste0("ΔE ", nn$dE[i])))
+      })
+    )
+  })
+
+  # =============== Palettes ===============
+  updateSelectizeInput(session, "pal_search", choices = c("", pal_meta$id),
+                       selected = "", server = TRUE)
+
+  n_val <- reactive({
+    n <- suppressWarnings(as.integer(input$n))
+    if (length(n) != 1 || is.na(n)) n <- 15L
+    max(1L, min(N_MAX, n))
+  }) |> debounce(300)
+
+  pal_filtered <- reactive({
+    m <- pal_meta[pal_meta$type %in% input$pal_type, ]
+    if (length(input$pal_pkg)) m <- m[m$package %in% input$pal_pkg, ]
+    m
+  })
+
+  # pages: blocks of whole palettes (<= PAL_ROWS_BLOCK rows), BLOCKS_PER_PAGE per page
+  pal_layout <- reactive({
+    m <- pal_filtered(); n <- n_val()
+    if (!nrow(m)) return(list(page = integer(0), block = integer(0), ids = character(0)))
+    nrows <- vapply(m$id, function(id) max(1L, length(get_pal(id, n))), integer(1))
+    block <- integer(length(nrows)); b <- 1L; used <- 0L
+    for (i in seq_along(nrows)) {
+      if (used > 0 && used + nrows[i] > PAL_ROWS_BLOCK) { b <- b + 1L; used <- 0L }
+      block[i] <- b; used <- used + nrows[i]
+    }
+    list(ids = m$id, block = block, page = ceiling(block / BLOCKS_PER_PAGE))
+  })
+
+  n_pages <- reactive(max(1L, pal_layout()$page))
+  page <- reactiveVal(1L)
+  # priority > 0: runs before the "focus" observer when both are triggered together
+  observeEvent(list(input$pal_type, input$pal_pkg), page(1L), ignoreInit = TRUE,
+               ignoreNULL = FALSE, priority = 10)
+  observeEvent(n_pages(), if (page() > n_pages()) page(n_pages()))
+  observeEvent(input$prev_page, page(max(1L, page() - 1L)))
+  observeEvent(input$next_page, page(min(n_pages(), page() + 1L)))
+
+  output$page_label <- renderUI({
+    span(sprintf("Page %d / %d  –  %d palettes", page(), n_pages(), length(pal_layout()$ids)))
+  })
+
+  output$pal_sheet <- renderUI({
+    L <- pal_layout(); n <- n_val()
+    sel_id <- input$pal_search
+    if (!length(L$ids)) return(p("No palette matches these filters."))
+    sel <- L$page == page()
+    ids <- L$ids[sel]; blk <- L$block[sel]
+    blocks <- lapply(split(ids, blk), function(bids) {
+      rows <- unlist(lapply(bids, function(id) {
+        v <- get_pal(id, n)
+        if (!length(v)) return(list(tags$tr(class = "prow", `data-key` = id,
+                                            tags$td(class = "nm", id),
+                                            tags$td(colspan = 4, "not available for this n"))))
+        cls <- if (identical(id, sel_id)) "prow hl" else "prow"
+        lapply(v, function(hx) sheet_row(id, hx, cls, id))
+      }), recursive = FALSE)
+      sheet_block(rows, "package::palette")
+    })
+    tagList(
+      div(class = "sheet-note",
+          "You will need: library(paletteer), library(RColorBrewer) and library(wesanderson) ",
+          "to use these palettes, see their respective documentation for usage"),
+      div(class = "sheet-wrap", blocks))
+  })
+
+  # selecting a palette: show it, make it visible in the sheet and highlight it
+  focus <- reactiveVal(NULL)
+
+  observeEvent(input$pal_click, {
+    updateSelectizeInput(session, "pal_search", choices = c("", pal_meta$id),
+                         selected = input$pal_click, server = TRUE)
+  })
+
+  observeEvent(input$pal_search, {
+    req(input$pal_search %in% pal_meta$id)
+    m <- pal_meta[pal_meta$id == input$pal_search, ]
+    if (!(m$type %in% input$pal_type))
+      updateCheckboxGroupInput(session, "pal_type", selected = c(input$pal_type, m$type))
+    if (length(input$pal_pkg) && !(m$package %in% input$pal_pkg))
+      updateSelectizeInput(session, "pal_pkg", selected = c(input$pal_pkg, m$package))
+    focus(m$id)
+  })
+
+  observe({
+    id <- focus(); req(id)
+    L <- pal_layout()
+    i <- match(id, L$ids)
+    req(!is.na(i))            # waits until the filters include the palette
+    isolate({
+      if (page() != L$page[i]) page(L$page[i])
+      session$sendCustomMessage("highlight", list(cls = "prow", key = id))
+      focus(NULL)
+    })
+  })
+
+  output$pal_result <- renderUI({
+    req(input$pal_search %in% pal_meta$id)
+    id <- input$pal_search; n <- n_val()
+    m <- pal_meta[pal_meta$id == id, ]
+    v <- get_pal(id, n)
+    if (!length(v)) return(p(class = "text-danger small",
+                             "This palette cannot be generated with n = ", n, "."))
+    d <- hex_to_rgb(v)
+    vec_txt <- paste0("c(", paste0('"', v, '"', collapse = ", "), ")")
+    note <- if (length(v) < n)
+      div(class = "alert alert-warning py-1 px-2 small mt-2 mb-0",
+          sprintf("This %s palette has only %d colours: all of them are shown.", m$type, length(v)))
+    tagList(
+      div(class = "strip", lapply(v, function(h) div(style = sprintf("background:%s", h), title = h))),
+      div(class = "small text-muted mt-1",
+          sprintf("%s palette – %s – %d colour%s", m$type, m$kind,
+                  length(v), if (length(v) > 1) "s" else "")),
+      note,
+      tags$table(class = "pal-table",
+        tags$tr(tags$th(""), tags$th("R"), tags$th("G"), tags$th("B"), tags$th("HEX")),
+        lapply(seq_along(v), function(i) tags$tr(
+          tags$td(class = "sw", style = sprintf("background:%s", v[i])),
+          tags$td(d$R[i]), tags$td(d$G[i]), tags$td(d$B[i]), tags$td(code(v[i]))))),
+      div(class = "mt-2 d-flex gap-2",
+          copy_btn(vec_txt, "Copy HEX vector"),
+          copy_btn(paste(sprintf("%d, %d, %d", d$R, d$G, d$B), collapse = "\n"), "Copy RGB")),
+      div(class = "mt-2 small", tags$b("Same colours in R:")),
+      div(class = "rcode", pal_code(id, n), copy_btn(pal_code(id, n)))
+    )
+  })
+}
+
+shinyApp(ui, server)
