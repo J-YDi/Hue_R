@@ -41,7 +41,8 @@ Picking colours in R usually means guessing names like `"steelblue"`, digging th
 ### 🌈 Palettes tab: 2,918 palettes for any number of colours
 
 - **Choose the number of colours first** (1 to 30): the whole sheet is regenerated for that number.
-- **Palette sheet**, paginated and filtered by **type** (continuous, discrete, dynamic) and **package**.
+- **Strict mode** (optional): only shows the palettes that have at least the chosen number of colours.
+- **Palette sheet**, paginated and filtered by **type** (continuous, discrete, dynamic) and **package** (with a *Select all / none* button).
 - **Search a palette** by name (`package::palette`, with autocompletion), or click it in the sheet. You get:
   - a colour strip and the table of **R, G, B and HEX codes** of its colours,
   - **Copy HEX vector** → `c("#440154", "#3B528B", …)`, ready to paste in `scale_colour_manual(values = …)`,
